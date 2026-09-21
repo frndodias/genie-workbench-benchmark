@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from .app_yaml import render_app_yaml
+from .benchmark_job import ensure_benchmark_job
 from .apps import (
     deploy_app_from_workspace,
     ensure_app,
@@ -76,6 +77,12 @@ def run_install(w, cfg: InstallConfig, status_fn=None) -> dict[str, Any]:
     gso_job = ensure_gso_job(w, cfg, app_sp_client_id, deployer_user)
     status(f"GSO job ready: {gso_job.job_id}")
 
+    status("Creating/updating benchmark-eval job (reuses the GSO wheel + jobs dir)...")
+    benchmark_job_id = ensure_benchmark_job(
+        w, cfg, app_sp_client_id, deployer_user, gso_job.notebooks_path, gso_job.wheel_path
+    )
+    status(f"Benchmark job ready: {benchmark_job_id}")
+
     status("Rendering patched app.yaml into generated workspace source...")
     render_app_yaml(
         template_path=Path(cfg.repo_root or "") / "app.yaml",
@@ -84,6 +91,7 @@ def run_install(w, cfg: InstallConfig, status_fn=None) -> dict[str, Any]:
             "WAREHOUSE_ID": cfg.warehouse_id,
             "GSO_CATALOG": cfg.catalog,
             "GSO_JOB_ID": str(gso_job.job_id),
+            "BENCHMARK_JOB_ID": str(benchmark_job_id),
             "LAKEBASE_INSTANCE": cfg.lakebase_instance or "",
             "LLM_MODEL": cfg.llm_model,
             "MLFLOW_EXPERIMENT_ID": cfg.mlflow_experiment_id or "",

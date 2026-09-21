@@ -859,3 +859,78 @@ export interface GSOQueryUsageSignal {
   inaccessible_warehouses: string[]
   system_grant_sql: string | null
 }
+
+// ─── Benchmark tab — job-driven, persisted evaluation ───────────────────────
+
+/** A benchmark question configured on the Agent (from serialized_space). */
+export interface ConfiguredBenchmark {
+  question_id: string
+  question: string
+  expected_sql: string | null
+  // The benchmark's grading rubric (Genie `evaluation_note`), if authored.
+  evaluation_note: string | null
+}
+
+export interface BenchmarkListResponse {
+  count: number
+  benchmarks: ConfiguredBenchmark[]
+  job_configured: boolean
+}
+
+export interface BenchmarkTriggerResponse {
+  run_id: string
+  job_run_id: string
+  status: string
+}
+
+/** A persisted benchmark run header (from `benchmark_runs`). Warehouse returns
+ *  numeric columns as strings, so numbers are typed loosely and coerced in UI. */
+export interface BenchmarkRunHeader {
+  run_id: string
+  space_id?: string
+  space_name?: string | null
+  triggered_by?: string | null
+  llm_model?: string | null
+  run_at?: string | null
+  completed_at?: string | null
+  status: string
+  num_questions?: string | number | null
+  num_good?: string | number | null
+  num_bad?: string | number | null
+  num_needs_review?: string | number | null
+  num_final_good?: string | number | null
+  num_final_needs_review?: string | number | null
+  accuracy_native?: string | number | null
+  accuracy_adjusted?: string | number | null
+  error?: string | null
+  found?: boolean
+}
+
+/** A persisted sample of a query's returned rows. */
+export interface BenchmarkResultSample {
+  columns: string[]
+  data: unknown[][]
+  error?: string | null
+}
+
+/** One persisted per-question result (from `benchmark_results`). */
+export interface BenchmarkQuestionResult {
+  question_id: string
+  question: string
+  evaluation_note: string | null
+  expected_sql: string | null
+  generated_sql: string | null
+  result_databricks: string
+  assessment_reasons: string[]
+  python_method: string | null
+  python_equivalent: boolean
+  python_detail: string | null
+  llm_verdict: string | null
+  llm_confidence: string | number | null
+  llm_reasoning: string | null
+  llm_model: string | null
+  result_final: string
+  decided_by: string
+  generated_result: BenchmarkResultSample | null
+  expected_result: BenchmarkResultSample | null
+}

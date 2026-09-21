@@ -120,7 +120,7 @@ export function RunDetailView({ runId, onBack, onRefreshIqScore }: RunDetailView
         description="Reviews benchmark quality, repairs eligible items, and establishes the evaluation set."
         icon={ShieldCheck}
       >
-        <BenchmarkChangesPanel runId={runId} showTitle={false} />
+        <BenchmarkChangesPanel runId={runId} showTitle={false} championIteration={run.bestIteration ?? null} />
       </RunActivitySection>
 
       <RunActivitySection

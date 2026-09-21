@@ -35,6 +35,10 @@ import type {
   GSOPublishRecordResponse,
   CurrentVersionResponse,
   GSORevertOptions,
+  BenchmarkListResponse,
+  BenchmarkTriggerResponse,
+  BenchmarkRunHeader,
+  BenchmarkQuestionResult,
 } from "@/types"
 
 const API_BASE = "/api"
@@ -621,6 +625,45 @@ export async function getAutoOptimizePublishRecord(runId: string): Promise<GSOPu
   } catch {
     return null
   }
+}
+
+// ─── Benchmark tab — native Genie Eval-Run, on demand ───────────────────────
+
+export async function getBenchmarks(spaceId: string): Promise<BenchmarkListResponse> {
+  return fetchWithTimeout<BenchmarkListResponse>(`${API_BASE}/benchmark/${spaceId}`)
+}
+
+export async function runBenchmark(
+  spaceId: string,
+  body: { benchmark_question_ids?: string[]; llm_model?: string | null },
+): Promise<BenchmarkTriggerResponse> {
+  return fetchWithTimeout<BenchmarkTriggerResponse>(
+    `${API_BASE}/benchmark/${spaceId}/run`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        benchmark_question_ids: body.benchmark_question_ids ?? null,
+        llm_model: body.llm_model ?? null,
+      }),
+    },
+  )
+}
+
+export async function listBenchmarkRuns(spaceId: string, limit = 50): Promise<{ runs: BenchmarkRunHeader[] }> {
+  return fetchWithTimeout<{ runs: BenchmarkRunHeader[] }>(`${API_BASE}/benchmark/${spaceId}/runs?limit=${limit}`)
+}
+
+export async function getBenchmarkRun(runId: string): Promise<BenchmarkRunHeader> {
+  return fetchWithTimeout<BenchmarkRunHeader>(`${API_BASE}/benchmark/runs/${runId}`)
+}
+
+export async function getBenchmarkRunResults(runId: string): Promise<{ run_id: string; results: BenchmarkQuestionResult[] }> {
+  return fetchWithTimeout<{ run_id: string; results: BenchmarkQuestionResult[] }>(
+    `${API_BASE}/benchmark/runs/${runId}/results`,
+    {},
+    LONG_TIMEOUT,
+  )
 }
 
 export { ApiError }

@@ -3,12 +3,13 @@
  * Tabs: Score (default) | Optimize | History
  */
 import { useState, useEffect, useRef, useCallback, useMemo } from "react"
-import { ArrowLeft, Star, BarChart2, Clock, ExternalLink, Rocket, Play, ChevronDown, ChevronRight, Settings, RefreshCw } from "lucide-react"
+import { ArrowLeft, Star, BarChart2, Clock, ExternalLink, Rocket, Play, ChevronDown, ChevronRight, Settings, RefreshCw, ClipboardCheck } from "lucide-react"
 import { scanSpace, toggleStar, getSpaceHistory, getSpaceDetail, getActiveRunForSpace } from "@/lib/api"
 import { MATURITY_COLORS, getOptimizationLabel } from "@/lib/utils"
 import type { ScanResult, ScoreHistoryPoint, OptimizationEvent } from "@/types"
 import { IQScoreTab } from "./IQScoreTab"
 import { HistoryTab } from "./HistoryTab"
+import { BenchmarkTab } from "./BenchmarkTab"
 import { useAnalysis } from "@/hooks/useAnalysis"
 import { SpaceOverview } from "@/components/SpaceOverview"
 import { AutoOptimizeTab } from "@/components/auto-optimize/AutoOptimizeTab"
@@ -153,6 +154,7 @@ export function SpaceDetail({ spaceId, displayName, spaceUrl, activeTab, runId, 
   const tabs: { id: SpaceTab; label: string; icon: React.ReactNode }[] = [
     { id: "score", label: "Score", icon: <BarChart2 className="w-4 h-4" /> },
     { id: "optimize", label: "Optimize", icon: <Rocket className="w-4 h-4" /> },
+    { id: "benchmark", label: "Benchmark", icon: <ClipboardCheck className="w-4 h-4" /> },
     { id: "history", label: "History", icon: <Clock className="w-4 h-4" /> },
   ]
 
@@ -330,6 +332,10 @@ export function SpaceDetail({ spaceId, displayName, spaceUrl, activeTab, runId, 
             onRefreshIqScore={handlePostOptimizationScan}
             onViewIqScore={() => onNavigate("score")}
           />
+        )}
+
+        {activeTab === "benchmark" && (
+          <BenchmarkTab spaceId={spaceId} spaceUrl={spaceUrl} />
         )}
 
         {activeTab === "history" && (

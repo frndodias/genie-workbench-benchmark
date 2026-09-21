@@ -202,6 +202,69 @@ resources:
             dependencies:
               - .build/genie_space_optimizer-0.0.0-py3-none-any.whl
 
+    # -----------------------------------------------------------------------
+    # Benchmark-eval job — on-demand, persisted benchmark evaluation.
+    # Single serverless task: native Genie Eval-Run + the false-negative
+    # cascade (deterministic SQL/multiset -> LLM review with each benchmark's
+    # evaluation_note), persisted to <catalog>.<schema>.benchmark_runs /
+    # benchmark_results. Result tables are created by the notebook on first run
+    # (CREATE TABLE IF NOT EXISTS). Reuses the same GSO wheel. The app's
+    # Benchmark tab triggers it via run-now (deploy.sh injects BENCHMARK_JOB_ID).
+    # -----------------------------------------------------------------------
+    benchmark-eval-runner:
+      name: "genie-workbench-benchmark-eval-job"
+      description: >-
+        Genie Workbench benchmark evaluation: native Genie Eval-Run + the
+        false-negative cascade (deterministic SQL/multiset -> LLM review with
+        evaluation_note), persisted to Unity Catalog. Triggered on demand by the
+        app's Benchmark tab; question_ids scopes the run (empty => all).
+      max_concurrent_runs: 10
+      queue:
+        enabled: true
+      tags:
+        app: "genie-workbench"
+        managed-by: "databricks-bundle"
+        pattern: "benchmark-eval"
+      parameters:
+        - name: run_id
+          default: ""
+        - name: space_id
+          default: ""
+        - name: question_ids
+          default: "[]"
+        - name: llm_model
+          default: ${var.llm_model}
+        - name: triggered_by
+          default: ""
+        - name: catalog
+          default: ""
+        - name: schema
+          default: "genie_space_optimizer"
+        - name: warehouse_id
+          default: ""
+      tasks:
+        - task_key: benchmark_eval
+          notebook_task:
+            notebook_path: ./packages/genie-space-optimizer/src/genie_space_optimizer/jobs/run_benchmark_eval.py
+            base_parameters:
+              run_id: "{{job.parameters.run_id}}"
+              space_id: "{{job.parameters.space_id}}"
+              question_ids: "{{job.parameters.question_ids}}"
+              llm_model: "{{job.parameters.llm_model}}"
+              triggered_by: "{{job.parameters.triggered_by}}"
+              catalog: "{{job.parameters.catalog}}"
+              schema: "{{job.parameters.schema}}"
+              warehouse_id: "{{job.parameters.warehouse_id}}"
+          environment_key: default
+          timeout_seconds: 7200
+          max_retries: 0
+      environments:
+        - environment_key: default
+          spec:
+            environment_version: "4"
+            dependencies:
+              - .build/genie_space_optimizer-0.0.0-py3-none-any.whl
+
 # ---------------------------------------------------------------------------
 # Targets
 # ---------------------------------------------------------------------------

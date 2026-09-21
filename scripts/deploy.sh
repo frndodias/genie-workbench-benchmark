@@ -396,6 +396,40 @@ fi
 
 echo "  ✓ Optimization job deployed: $JOB_ID"
 
+# Resolve the benchmark-eval job id from the same bundle (single-task job that
+# runs native Eval-Run + the false-negative cascade, persisted to UC). The app's
+# Benchmark tab triggers it; its id is injected into app.yaml below.
+BENCHMARK_JOB_ID=$(cd "$PROJECT_DIR" && databricks bundle summary -t app \
+    --var="catalog=$CATALOG" \
+    --var="warehouse_id=$WAREHOUSE_ID" \
+    --var="llm_model=$LLM_MODEL" \
+    --profile "$PROFILE" -o json 2>/dev/null \
+    | python3 -c "
+import sys, json
+s = json.load(sys.stdin)
+print(s['resources']['jobs']['benchmark-eval-runner']['id'])
+" 2>/dev/null) || true
+
+if [ -n "$BENCHMARK_JOB_ID" ]; then
+    echo "  ✓ Benchmark-eval job deployed: $BENCHMARK_JOB_ID"
+    BENCH_PERM_PAYLOAD=$(python3 -c "
+import json
+acl = [
+    {'user_name': '$DEPLOYER', 'permission_level': 'IS_OWNER'},
+    {'group_name': 'users', 'permission_level': 'CAN_VIEW'},
+    {'service_principal_name': '$SP_CLIENT_ID', 'permission_level': 'CAN_MANAGE'},
+]
+print(json.dumps({'access_control_list': acl}))
+")
+    if databricks api put "/api/2.0/permissions/jobs/$BENCHMARK_JOB_ID" --profile "$PROFILE" --json "$BENCH_PERM_PAYLOAD" 2>/dev/null; then
+        echo "  ✓ Benchmark job permissions updated (owner=$DEPLOYER, SP=CAN_MANAGE, users=CAN_VIEW)"
+    else
+        echo "  ⚠ Could not set benchmark job permissions — SP may not be able to trigger benchmark runs."
+    fi
+else
+    echo "  ⚠ Could not resolve benchmark-eval job ID — Benchmark tab will be disabled in the app."
+fi
+
 # Grant job permissions (bundle manages run_as; API call sets ownership + SP access)
 PERM_PAYLOAD=$(python3 -c "
 import json
@@ -477,6 +511,13 @@ sed -i.bak "s|__MLFLOW_EXPERIMENT_ID__|$MLFLOW_EXPERIMENT_ID|" "$PATCHED_APP_YAM
 if [ -n "$JOB_ID" ]; then
     sed -i.bak "s|__GSO_JOB_ID__|$JOB_ID|" "$PATCHED_APP_YAML"
 fi
+if [ -n "$BENCHMARK_JOB_ID" ]; then
+    sed -i.bak "s|__BENCHMARK_JOB_ID__|$BENCHMARK_JOB_ID|" "$PATCHED_APP_YAML"
+else
+    # No benchmark job id resolved — blank the placeholder so the app starts
+    # cleanly (the Benchmark tab reports itself as not configured).
+    sed -i.bak "s|__BENCHMARK_JOB_ID__||" "$PATCHED_APP_YAML"
+fi
 
 rm -f "${PATCHED_APP_YAML}.bak"
 
@@ -489,7 +530,7 @@ fi
 
 databricks workspace import "$WS_PATH/app.yaml" \
     --profile "$PROFILE" --file "$PATCHED_APP_YAML" --format AUTO --overwrite 2>/dev/null && \
-echo "  ✓ app.yaml patched (WAREHOUSE=$WAREHOUSE_ID, GSO_CATALOG=$CATALOG, GSO_JOB_ID=${JOB_ID:-<none>}, LAKEBASE_INSTANCE=$LAKEBASE_INSTANCE, LLM_MODEL=$LLM_MODEL, MLFLOW=${MLFLOW_EXPERIMENT_ID:-<disabled>})" || \
+echo "  ✓ app.yaml patched (WAREHOUSE=$WAREHOUSE_ID, GSO_CATALOG=$CATALOG, GSO_JOB_ID=${JOB_ID:-<none>}, BENCHMARK_JOB_ID=${BENCHMARK_JOB_ID:-<none>}, LAKEBASE_INSTANCE=$LAKEBASE_INSTANCE, LLM_MODEL=$LLM_MODEL, MLFLOW=${MLFLOW_EXPERIMENT_ID:-<disabled>})" || \
 echo "  ⚠ Could not patch app.yaml — config may not be set"
 
 # Ensure app compute is running before deploying

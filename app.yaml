@@ -92,6 +92,10 @@ env:
     value: "genie_space_optimizer"
   - name: GSO_JOB_ID
     value: "__GSO_JOB_ID__"
+  # Benchmark-eval job (native Genie Eval-Run + false-negative cascade, persisted
+  # to UC). Injected by the installer; the app's Benchmark tab triggers it.
+  - name: BENCHMARK_JOB_ID
+    value: "__BENCHMARK_JOB_ID__"
   - name: GSO_WAREHOUSE_ID
     valueFrom: sql-warehouse
 

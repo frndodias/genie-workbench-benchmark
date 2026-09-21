@@ -9,13 +9,15 @@ import {
   CheckCircle2,
   ChevronDown,
   ShieldCheck,
+  ListChecks,
 } from "lucide-react"
-import { getAutoOptimizeBenchmarkChanges } from "@/lib/api"
+import { getAutoOptimizeBenchmarkChanges, getAutoOptimizeQuestionResults } from "@/lib/api"
 import type {
   GSOBenchmarkChanges,
   GSOBenchmarkMutation,
   GSOBenchmarkQC,
   GSOBenchmarkQualityFinding,
+  GSOQuestionDetail,
 } from "@/types"
 
 interface BenchmarkChangesPanelProps {
@@ -27,6 +29,12 @@ interface BenchmarkChangesPanelProps {
   changes?: GSOBenchmarkChanges | null
   /** Hide the card title when a run-level activity divider labels the panel. */
   showTitle?: boolean
+  /**
+   * Champion (applied) iteration for this run. When provided, the panel renders
+   * a "Benchmark results" card showing how the applied configuration scored on
+   * each benchmark question (GOOD / BAD / NEEDS_REVIEW + reasons).
+   */
+  championIteration?: number | null
 }
 
 // The documented working-set window (D8 / §3.5): 30–40 questions.
@@ -45,6 +53,7 @@ export function BenchmarkChangesPanel({
   runId,
   changes: provided,
   showTitle = true,
+  championIteration = null,
 }: BenchmarkChangesPanelProps) {
   const [fetched, setFetched] = useState<GSOBenchmarkChanges | null>(null)
   const [loading, setLoading] = useState(provided === undefined)
@@ -104,6 +113,10 @@ export function BenchmarkChangesPanel({
             ? "GSO reviewed the existing benchmarks without changing the live benchmark set."
             : "GSO made no additive changes to this agent's benchmark set."}
         </p>
+      )}
+
+      {championIteration != null && (
+        <BenchmarkResults runId={runId} iteration={championIteration} />
       )}
     </PanelShell>
   )
@@ -615,6 +628,205 @@ function MutationRow({ mutation }: { mutation: GSOBenchmarkMutation }) {
         <pre className="rounded border border-default bg-surface p-2 font-mono text-[11px] whitespace-pre-wrap overflow-x-auto">
           {afterSql ?? beforeSql}
         </pre>
+      )}
+    </div>
+  )
+}
+
+const _norm = (a?: string | null) => String(a ?? "").trim().toUpperCase()
+
+/**
+ * Per-question benchmark evaluation result for the champion (applied) iteration
+ * of this run. Uses ``/runs/{run_id}/question-results?iteration=<champion>`` —
+ * the same rows_json the Attempt Ladder reads — and surfaces the native
+ * ``assessment`` (GOOD / BAD / NEEDS_REVIEW), the ``assessment_reasons`` (the
+ * "why"), and the generated-vs-expected SQL for each question. Scoped entirely
+ * by ``runId`` so it reflects one optimization run.
+ */
+function BenchmarkResults({ runId, iteration }: { runId: string; iteration: number }) {
+  const [results, setResults] = useState<GSOQuestionDetail[] | null>(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    let active = true
+    getAutoOptimizeQuestionResults(runId, iteration)
+      .then((r) => {
+        if (active) {
+          setResults(r)
+          setLoading(false)
+        }
+      })
+      .catch(() => {
+        if (active) {
+          setResults([])
+          setLoading(false)
+        }
+      })
+    return () => {
+      active = false
+    }
+  }, [runId, iteration])
+
+  if (loading) {
+    return (
+      <div className="rounded-xl border border-default bg-elevated/20 p-4 text-center text-sm text-muted animate-pulse">
+        Loading benchmark results…
+      </div>
+    )
+  }
+  if (!results || results.length === 0) return null
+
+  const good = results.filter((r) => _norm(r.assessment) === "GOOD")
+  const needsReview = results.filter((r) => _norm(r.assessment) === "NEEDS_REVIEW")
+  const bad = results.filter((r) => {
+    const a = _norm(r.assessment)
+    return a !== "GOOD" && a !== "NEEDS_REVIEW"
+  })
+
+  return (
+    <div className="space-y-3 rounded-xl border border-default bg-elevated/20 p-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div className="flex items-center gap-1.5 text-xs font-semibold text-primary">
+            <ListChecks className="h-3.5 w-3.5 text-indigo-500" />
+            Benchmark results
+          </div>
+          <p className="mt-1 text-[11px] text-muted">
+            How the champion (applied) configuration scored on each benchmark question
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-1.5 text-[11px] font-medium">
+          <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-emerald-600 dark:text-emerald-400">
+            {good.length} good
+          </span>
+          <span className="rounded-full border border-red-500/30 bg-red-500/10 px-2 py-0.5 text-red-600 dark:text-red-400">
+            {bad.length} bad
+          </span>
+          {needsReview.length > 0 && (
+            <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-amber-600 dark:text-amber-400">
+              {needsReview.length} needs review
+            </span>
+          )}
+        </div>
+      </div>
+
+      <ResultGroup title="Bad" tone="error" rows={bad} defaultExpanded />
+      <ResultGroup title="Needs review" tone="warning" rows={needsReview} defaultExpanded />
+      <ResultGroup title="Good" tone="success" rows={good} defaultExpanded={false} />
+    </div>
+  )
+}
+
+function ResultGroup({
+  title,
+  tone,
+  rows,
+  defaultExpanded,
+}: {
+  title: string
+  tone: "error" | "warning" | "success"
+  rows: GSOQuestionDetail[]
+  defaultExpanded: boolean
+}) {
+  const [expanded, setExpanded] = useState(defaultExpanded)
+  const contentId = useId()
+  if (rows.length === 0) return null
+  const toneClass =
+    tone === "error"
+      ? "text-red-500"
+      : tone === "warning"
+        ? "text-amber-600 dark:text-amber-400"
+        : "text-emerald-600 dark:text-emerald-400"
+
+  return (
+    <div className="border-t border-default pt-2">
+      <button
+        type="button"
+        className="flex w-full items-center justify-between gap-2 rounded px-1 py-1 text-left hover:bg-elevated/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/60"
+        aria-expanded={expanded}
+        aria-controls={contentId}
+        onClick={() => setExpanded((value) => !value)}
+      >
+        <span className={`text-[11px] font-semibold uppercase tracking-wider ${toneClass}`}>
+          {title} ({rows.length})
+        </span>
+        <ChevronDown className={`h-3.5 w-3.5 text-muted transition-transform ${expanded ? "rotate-180" : ""}`} />
+      </button>
+      {expanded && (
+        <div id={contentId} className="mt-2 space-y-2">
+          {rows.map((row, index) => (
+            <ResultRow key={`${row.question_id}-${index}`} row={row} />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function ResultRow({ row }: { row: GSOQuestionDetail }) {
+  const [open, setOpen] = useState(false)
+  const assessment = _norm(row.assessment)
+  const badge =
+    assessment === "GOOD"
+      ? { label: "GOOD", cls: "border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400" }
+      : assessment === "NEEDS_REVIEW"
+        ? { label: "NEEDS REVIEW", cls: "border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400" }
+        : { label: assessment || "BAD", cls: "border-red-500/30 bg-red-500/10 text-red-600 dark:text-red-400" }
+  const reasons = row.assessment_reasons ?? []
+  const hasDetail = Boolean(row.generated_sql || row.expected_sql)
+
+  return (
+    <div className="rounded-md border border-default bg-surface/70 px-3 py-2 text-xs">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <span className="font-medium text-primary">{row.question || row.question_id}</span>
+        <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-medium ${badge.cls}`}>
+          {badge.label}
+        </span>
+      </div>
+      {reasons.length > 0 && (
+        <div className="mt-1.5 flex flex-wrap gap-1">
+          {reasons.map((reason, index) => (
+            <span
+              key={index}
+              className="rounded-full border border-default bg-elevated px-2 py-0.5 text-[10px] font-medium capitalize text-muted"
+            >
+              {reason.toLowerCase().replaceAll("_", " ")}
+            </span>
+          ))}
+        </div>
+      )}
+      {hasDetail && (
+        <>
+          <button
+            type="button"
+            onClick={() => setOpen((value) => !value)}
+            className="mt-2 flex items-center gap-1 text-[10px] font-medium text-muted hover:text-primary"
+            aria-expanded={open}
+          >
+            <ChevronDown className={`h-3 w-3 transition-transform ${open ? "rotate-180" : ""}`} />
+            {open ? "Hide SQL" : "Show SQL"}
+          </button>
+          {open && (
+            <div className="mt-2 grid gap-2 md:grid-cols-2">
+              <div>
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-muted">
+                  Generated SQL{row.genie_rows != null ? ` · ${row.genie_rows} rows` : ""}
+                </p>
+                <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap rounded bg-elevated p-2 font-mono text-[10px] text-primary">
+                  {row.generated_sql || "—"}
+                </pre>
+              </div>
+              <div>
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-cyan-600 dark:text-cyan-400">
+                  Expected SQL{row.gt_rows != null ? ` · ${row.gt_rows} rows` : ""}
+                </p>
+                <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap rounded bg-cyan-500/5 p-2 font-mono text-[10px] text-primary ring-1 ring-cyan-500/20">
+                  {row.expected_sql || "—"}
+                </pre>
+              </div>
+            </div>
+          )}
+        </>
       )}
     </div>
   )
