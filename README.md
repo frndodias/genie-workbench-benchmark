@@ -7,6 +7,7 @@ Use it to:
 - Create Genie Agents from business requirements and Unity Catalog data sources
 - Score Genie Agent quality with an instant rule-based IQ scan
 - Run benchmark-driven optimization through the Auto-Optimize pipeline
+- Evaluate benchmarks on demand and reclassify false negatives, without a full optimization run
 - Track scan history, starred spaces, sessions, and optimization state
 
 ## Quick Start
@@ -48,6 +49,16 @@ For subsequent local terminal updates:
 ```
 
 Do not run `databricks bundle init`; this project already has its bundle configuration.
+
+## Benchmark (on-demand evaluation)
+
+A dedicated **Benchmark** tab runs a Genie Agent's benchmark evaluation on demand — without the full Auto-Optimize run. It executes the native Genie Eval-Run and then reclassifies **false negatives** (an answer marked BAD whose data is actually equivalent to the expected result → GOOD) through a cascade:
+
+1. **Exact SQL set-diff** (`EXCEPT ALL` both directions) — full-precision, column-position based, robust to column-name differences and entity/value swaps.
+2. **Numeric-multiset** — same numbers regardless of shape/order (handles transposed/reshaped results). Runs unbounded on the engine, so the verdict is never decided on a truncated sample.
+3. **LLM review** — uses each benchmark's `evaluation_note` as the grading rubric to judge semantic equivalence.
+
+Everything runs as a Databricks job and persists to `<catalog>.<schema>.benchmark_runs` and `benchmark_results`, with a per-question drill-down in the app (native vs. adjusted accuracy, verdict + who decided it, generated vs. expected SQL and the underlying data). Result tables are created by the job on first run. The installer (both the notebook and local terminal paths) provisions the `benchmark-eval` job automatically and injects `BENCHMARK_JOB_ID` into `app.yaml` — no extra setup.
 
 ## Demo Data
 
