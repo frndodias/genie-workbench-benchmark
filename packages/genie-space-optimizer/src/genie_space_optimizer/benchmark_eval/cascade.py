@@ -83,11 +83,15 @@ def to_float(cell: object) -> float | None:
         return None
 
 
-def numeric_multiset(preview: dict | None) -> list[float] | None:
-    """Sorted multiset of every numeric cell value in a result (rounded 2dp).
+def numeric_multiset(preview: dict | None, decimals: int = 2) -> list[float] | None:
+    """Sorted multiset of every numeric cell value in a result.
 
     Shape- and order-insensitive; keeps only numbers so text (labels) drops out.
-    Returns None when the result is missing or errored.
+    ``decimals`` controls the rounding tolerance (default 2dp). Returns None when
+    the result is missing or errored. NOTE: this operates on the in-memory
+    ``preview`` dict, so it only sees the rows the caller fetched — for a
+    verdict over the full result use an unbounded comparator (see
+    ``compute_equivalence``'s ``multiset_equivalent`` hook).
     """
     if not preview or preview.get("error"):
         return None
@@ -98,14 +102,14 @@ def numeric_multiset(preview: dict | None) -> list[float] | None:
         for cell in row:
             f = to_float(cell)
             if f is not None:
-                values.append(round(f, 2))
+                values.append(round(f, decimals))
     return sorted(values)
 
 
-def data_equivalent(generated: dict | None, expected: dict | None) -> bool:
+def data_equivalent(generated: dict | None, expected: dict | None, decimals: int = 2) -> bool:
     """True when both results carry the identical multiset of numeric values."""
-    a = numeric_multiset(generated)
-    b = numeric_multiset(expected)
+    a = numeric_multiset(generated, decimals)
+    b = numeric_multiset(expected, decimals)
     if not a or not b:
         return False
     return a == b
@@ -156,8 +160,20 @@ def compute_equivalence(
     generated: dict | None,
     expected: dict | None,
     run_sql: Callable[[str], dict],
+    multiset_equivalent: Callable[[str | None, str | None], bool | None] | None = None,
 ) -> dict:
-    """Cascade: exact SQL set-diff first, numeric multiset for reshape, else none."""
+    """Cascade: exact SQL set-diff first, numeric multiset for reshape, else none.
+
+    Both tiers are meant to be UNBOUNDED (they run on the engine, not on the
+    fetched sample):
+      - Tier 1 (`sql_exact`) uses ``run_sql`` for a COUNT-only ``EXCEPT ALL`` —
+        no rows are pulled, all rows are compared.
+      - Tier 2 (`numeric_multiset`) runs when the shapes differ. If a
+        ``multiset_equivalent(a_sql, b_sql)`` callable is supplied it decides the
+        tier on the FULL result (returning True/False, or None if it can't); only
+        as a last resort does it fall back to the in-memory ``data_equivalent``,
+        which sees just the fetched sample.
+    """
     ok = (
         generated and expected
         and not generated.get("error") and not expected.get("error")
@@ -178,14 +194,27 @@ def compute_equivalence(
                         "Same shape, but some rows/values differ."
                     ),
                 }
+        # Tier 2: reshape/transpose. Prefer the unbounded engine-side comparator.
+        if multiset_equivalent is not None:
+            unbounded = multiset_equivalent(a_sql, b_sql)
+            if unbounded is not None:
+                return {
+                    "method": "numeric_multiset",
+                    "equivalent": unbounded,
+                    "detail": (
+                        "Same values, different shape — full result compared (labels not key-verified)."
+                        if unbounded else
+                        "Values differ — full result compared."
+                    ),
+                }
         equal = data_equivalent(generated, expected)
         return {
             "method": "numeric_multiset",
             "equivalent": equal,
             "detail": (
-                "Same values, different shape (labels not key-verified)."
+                "Same values, different shape (labels not key-verified; sample-based)."
                 if equal else
-                "Values differ."
+                "Values differ (sample-based)."
             ),
         }
     return {"method": "none", "equivalent": False, "detail": "Could not compare (a query failed)."}
@@ -212,7 +241,7 @@ JUDGE_SYSTEM_PROMPT = (
 )
 
 
-def _render_preview(preview: dict | None, *, max_rows: int = 30) -> str:
+def _render_preview(preview: dict | None, *, max_rows: int = 200) -> str:
     if not preview:
         return "(no result)"
     if preview.get("error"):

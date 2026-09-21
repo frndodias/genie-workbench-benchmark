@@ -146,15 +146,63 @@ spark.sql(
 # COMMAND ----------
 
 
+# How many rows to pull to the driver for the DASHBOARD SAMPLE + LLM preview
+# ONLY. This is not the comparison: the verdict is decided by unbounded,
+# engine-side checks (tier 1 EXCEPT ALL; tier 2 spark_numeric_equivalent), so a
+# large result is never truncated for grading — we just don't render millions of
+# rows in the UI. Rounding precision for the tier-2 numeric-multiset compare.
+DISPLAY_SAMPLE_ROWS = 500
+COMPARE_DECIMALS = 6
+_NUMERIC_SPARK_TYPES = {"tinyint", "smallint", "int", "bigint", "float", "double", "decimal"}
+
+
 def run_warehouse_sql(sql: str) -> dict:
-    """Execute SQL and return a preview dict {columns, data, error} (Spark)."""
+    """Execute SQL and return a DISPLAY-SAMPLE preview dict {columns, data, error}.
+
+    The row cap here bounds only what we show/persist and hand to the LLM — the
+    equivalence verdict is computed unbounded on the engine (see
+    ``sql_setdiff_equivalent`` and ``spark_numeric_equivalent``). For the tier-1
+    COUNT query this returns a single row, so the cap is a no-op there.
+    """
     try:
-        df = spark.sql(sql).limit(2000)
+        df = spark.sql(sql).limit(DISPLAY_SAMPLE_ROWS)
         cols = [{"name": f} for f in df.columns]
         data = [[None if v is None else str(v) for v in row] for row in df.collect()]
         return {"columns": cols, "data": data, "error": None}
     except Exception as e:  # noqa: BLE001
         return {"columns": [], "data": [], "error": str(e)[:500]}
+
+
+def spark_numeric_equivalent(a_sql: str | None, b_sql: str | None) -> bool | None:
+    """Unbounded multiset equality of every numeric value across two results.
+
+    Runs entirely on the cluster (``exceptAll`` both directions over the stacked
+    numeric columns) — no row cap and no driver ``collect()`` of the full data,
+    so it scales and is exact to ``COMPARE_DECIMALS``. Handles shape/transpose
+    differences (labels are dropped). Returns True/False, or None when either
+    side has no numeric column (caller then falls back to the sampled check).
+    """
+    def _numeric_values(sql: str | None):
+        if not sql or not sql.strip():
+            return None
+        inner = sql.strip().rstrip(";").strip()
+        df = spark.sql(f"SELECT * FROM ({inner})")
+        num_cols = [c for c, t in df.dtypes if t.split("(")[0] in _NUMERIC_SPARK_TYPES]
+        if not num_cols:
+            return None
+        casts = ", ".join(f"CAST(`{c}` AS DOUBLE)" for c in num_cols)
+        stacked = df.selectExpr(f"stack({len(num_cols)}, {casts}) AS v")
+        return stacked.selectExpr(f"round(v, {COMPARE_DECIMALS}) AS v").where("v IS NOT NULL")
+
+    try:
+        a = _numeric_values(a_sql)
+        b = _numeric_values(b_sql)
+        if a is None or b is None:
+            return None
+        return a.exceptAll(b).count() == 0 and b.exceptAll(a).count() == 0
+    except Exception:  # noqa: BLE001
+        logger.exception("spark_numeric_equivalent failed; falling back to sampled check")
+        return None
 
 
 def call_llm(messages: list[dict], model: str) -> str:
@@ -226,7 +274,10 @@ for row in result.rows:
     if native != "GOOD":
         generated = run_warehouse_sql(gen_sql) if gen_sql else None
         expected = run_warehouse_sql(exp_sql) if exp_sql else None
-        equivalence = compute_equivalence(gen_sql, exp_sql, generated, expected, run_warehouse_sql)
+        equivalence = compute_equivalence(
+            gen_sql, exp_sql, generated, expected, run_warehouse_sql,
+            multiset_equivalent=spark_numeric_equivalent,
+        )
         # Always ask the LLM for a justification on a failed row (so every
         # non-GOOD row carries the model's verdict + reasoning), even when the
         # deterministic tier already decided. Retry once on a transient failure
@@ -252,7 +303,7 @@ for row in result.rows:
             return None
         return json.dumps({
             "columns": [c.get("name") for c in preview.get("columns") or []],
-            "data": (preview.get("data") or [])[:20],
+            "data": (preview.get("data") or [])[:100],
             "error": preview.get("error"),
         }, ensure_ascii=False)
 
