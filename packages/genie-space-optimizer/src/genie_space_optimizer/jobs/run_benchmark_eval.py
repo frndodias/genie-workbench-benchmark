@@ -97,11 +97,14 @@ CREATE TABLE IF NOT EXISTS {RESULTS_TABLE} (
   python_method STRING, python_equivalent BOOLEAN, python_detail STRING,
   llm_verdict STRING, llm_confidence DOUBLE, llm_reasoning STRING, llm_model STRING,
   result_final STRING, decided_by STRING,
-  generated_result STRING, expected_result STRING, logged_at TIMESTAMP
+  generated_result STRING, expected_result STRING, logged_at TIMESTAMP,
+  eval_result_id STRING
 ) USING DELTA
 """)
-# Backfill the result-sample columns on pre-existing tables (idempotent).
-for _col in ("generated_result", "expected_result"):
+# Backfill newer columns on pre-existing tables (idempotent). eval_result_id is
+# the native per-question result id — the app deep-links to it in the Genie UI
+# (/genie/rooms/<space>/benchmarks/<eval_run_id>?evalId=<eval_result_id>).
+for _col in ("generated_result", "expected_result", "eval_result_id"):
     try:
         spark.sql(f"ALTER TABLE {RESULTS_TABLE} ADD COLUMNS ({_col} STRING)")
     except Exception:
@@ -325,6 +328,7 @@ for row in result.rows:
         "result_final": result_final, "decided_by": decided_by,
         "generated_result": _sample(generated), "expected_result": _sample(expected),
         "logged_at": _now(),
+        "eval_result_id": str(row.get("result_id") or "") or None,
     })
 
 # COMMAND ----------
@@ -350,6 +354,7 @@ if rows_out:
         StructField("result_final", _s), StructField("decided_by", _s),
         StructField("generated_result", _s), StructField("expected_result", _s),
         StructField("logged_at", TimestampType()),
+        StructField("eval_result_id", _s),
     ])
     ordered = [{f.name: row.get(f.name) for f in schema.fields} for row in rows_out]
     df = spark.createDataFrame(ordered, schema=schema)

@@ -46,6 +46,39 @@ const POLL_INTERVAL_MS = 5000
 const norm = (a?: string | null) => String(a ?? "").trim().toUpperCase()
 const num = (v: unknown): number => (v == null || v === "" ? 0 : Number(v) || 0)
 
+/**
+ * Deep link into the Genie UI for a benchmark question: the question's result
+ * inside its native eval run (`/benchmarks/<eval_run_id>?evalId=<result_id>`),
+ * which is where "Update ground truth" lives. Falls back to the eval run, then
+ * to the space's benchmarks list. With `questionsTab`, links to the Questions
+ * tab instead — used when the run's question id no longer exists (benchmarks
+ * were rewritten since the run), where editing from the old run would fail.
+ * Built off `spaceUrl` so host + `?o=` carry over.
+ */
+function genieBenchmarkUrl(
+  spaceUrl: string | null | undefined,
+  opts: { evalRunId?: string | null; evalResultId?: string | null; questionsTab?: boolean },
+): string | null {
+  if (!spaceUrl) return null
+  let url: URL
+  try {
+    url = new URL(spaceUrl)
+  } catch {
+    return null
+  }
+  const base = url.pathname.replace(/\/+$/, "")
+  if (opts.questionsTab || !opts.evalRunId) {
+    url.pathname = `${base}/benchmarks`
+    if (opts.questionsTab) url.searchParams.set("active_tab", "questions")
+  } else {
+    url.pathname = `${base}/benchmarks/${encodeURIComponent(opts.evalRunId)}`
+    if (opts.evalResultId) url.searchParams.set("evalId", opts.evalResultId)
+  }
+  return url.toString()
+}
+
+type GenieLinkKind = "question" | "run" | "stale"
+
 export function BenchmarkTab({ spaceId, spaceUrl }: BenchmarkTabProps) {
   const [list, setList] = useState<BenchmarkListResponse | null>(null)
   const [listLoading, setListLoading] = useState(true)
@@ -139,6 +172,9 @@ export function BenchmarkTab({ spaceId, spaceUrl }: BenchmarkTabProps) {
   const selectedCount = selectedIds.size
   const noteById: Record<string, string> = {}
   for (const b of list?.benchmarks ?? []) if (b.question_id && b.evaluation_note) noteById[b.question_id] = b.evaluation_note
+  // Question ids that exist on the Agent right now (null until the list loads,
+  // so nothing is flagged stale prematurely).
+  const currentIds = list ? new Set(list.benchmarks.map((b) => b.question_id).filter(Boolean)) : null
 
   function toggleOne(id: string) {
     setSelectedIds((prev) => {
@@ -315,7 +351,23 @@ export function BenchmarkTab({ spaceId, spaceUrl }: BenchmarkTabProps) {
             <p className="py-4 text-center text-xs text-muted">No per-question results (run may still be writing).</p>
           ) : (
             <div className="space-y-2">
-              {results.map((row, i) => <QuestionResultRow key={`${row.question_id}-${i}`} row={row} note={noteById[row.question_id]} />)}
+              {results.map((row, i) => {
+                const stale = currentIds !== null && !currentIds.has(row.question_id)
+                const kind: GenieLinkKind = stale ? "stale" : selectedRun.eval_run_id && row.eval_result_id ? "question" : "run"
+                return (
+                  <QuestionResultRow
+                    key={`${row.question_id}-${i}`}
+                    row={row}
+                    note={noteById[row.question_id]}
+                    genieUrl={genieBenchmarkUrl(spaceUrl, {
+                      evalRunId: selectedRun.eval_run_id,
+                      evalResultId: row.eval_result_id,
+                      questionsTab: stale,
+                    })}
+                    linkKind={kind}
+                  />
+                )
+              })}
             </div>
           )}
         </div>
@@ -339,7 +391,33 @@ function verdictBadge(v: string) {
   return { cls: "border-red-500/30 bg-red-500/10 text-red-600 dark:text-red-400", icon: XCircle }
 }
 
-function QuestionResultRow({ row, note }: { row: BenchmarkQuestionResult; note?: string }) {
+const GENIE_LINK: Record<GenieLinkKind, { label: string; title: string }> = {
+  question: {
+    label: "Edit in Genie",
+    title: "Opens this question in Genie — click \"Update ground truth\" to edit the benchmark",
+  },
+  run: {
+    label: "Edit in Genie",
+    title: "Opens this run in Genie — select the question, then click \"Update ground truth\" (older run: no per-question link was recorded)",
+  },
+  stale: {
+    label: "Edit in Questions",
+    title: "This benchmark was changed since this run (its id no longer exists), so editing from the old run would fail. Opens the Agent's current benchmark Questions — find it there and use \"Edit benchmark\".",
+  },
+}
+
+function QuestionResultRow({
+  row,
+  note,
+  genieUrl,
+  linkKind = "run",
+}: {
+  row: BenchmarkQuestionResult
+  note?: string
+  genieUrl?: string | null
+  linkKind?: GenieLinkKind
+}) {
+  const link = GENIE_LINK[linkKind]
   const [open, setOpen] = useState(false)
   const finalBadge = verdictBadge(row.result_final)
   const FinalIcon = finalBadge.icon
@@ -349,10 +427,31 @@ function QuestionResultRow({ row, note }: { row: BenchmarkQuestionResult; note?:
     <div className={`rounded-lg border px-3 py-2.5 text-xs ${norm(row.result_final) === "GOOD" && norm(row.result_databricks) !== "GOOD" ? "border-emerald-500/30 bg-emerald-500/5" : "border-default bg-elevated/30"}`}>
       <div className="flex flex-wrap items-start justify-between gap-2">
         <span className="font-medium text-primary">{row.question || row.question_id}</span>
-        <span className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium ${finalBadge.cls}`}>
-          <FinalIcon className="h-3 w-3" />
-          {norm(row.result_final)}{decidedBy ? ` · ${decidedBy}` : ""}
-        </span>
+        <div className="flex shrink-0 items-center gap-2">
+          {linkKind === "stale" && (
+            <span
+              className="inline-flex items-center gap-1 rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-600 dark:text-amber-400"
+              title={link.title}
+            >
+              <AlertTriangle className="h-2.5 w-2.5" /> benchmark changed since this run
+            </span>
+          )}
+          {genieUrl && (
+            <a
+              href={genieUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 text-[10px] font-medium text-accent hover:underline"
+              title={link.title}
+            >
+              {link.label} <ExternalLink className="h-3 w-3" />
+            </a>
+          )}
+          <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium ${finalBadge.cls}`}>
+            <FinalIcon className="h-3 w-3" />
+            {norm(row.result_final)}{decidedBy ? ` · ${decidedBy}` : ""}
+          </span>
+        </div>
       </div>
 
       {/* tier chips */}

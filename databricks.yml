@@ -262,8 +262,15 @@ resources:
         - environment_key: default
           spec:
             environment_version: "4"
+            # Transitive pins from uv.lock (see BENCHMARK_ENV_PINS in
+            # scripts/deploy_lib/benchmark_job.py): without them huggingface-hub
+            # 2.x sends pip backtracking to a broken uvicorn sdist and library
+            # install fails.
             dependencies:
               - .build/genie_space_optimizer-0.0.0-py3-none-any.whl
+              - huggingface-hub==1.8.0
+              - tokenizers==0.22.2
+              - uvicorn==0.42.0
 
 # ---------------------------------------------------------------------------
 # Targets

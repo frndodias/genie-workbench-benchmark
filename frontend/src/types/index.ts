@@ -903,6 +903,8 @@ export interface BenchmarkRunHeader {
   accuracy_native?: string | number | null
   accuracy_adjusted?: string | number | null
   error?: string | null
+  /** Native Genie eval-run id — deep-links to the run in the Genie UI. */
+  eval_run_id?: string | null
   found?: boolean
 }
 
@@ -933,4 +935,6 @@ export interface BenchmarkQuestionResult {
   decided_by: string
   generated_result: BenchmarkResultSample | null
   expected_result: BenchmarkResultSample | null
+  /** Native per-question eval result id (`evalId` in the Genie UI); null on older runs. */
+  eval_result_id?: string | null
 }

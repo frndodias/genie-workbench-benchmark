@@ -193,7 +193,7 @@ def list_runs(space_id: str, limit: int = 50):
         rows = _query(
             f"SELECT run_id, space_name, triggered_by, llm_model, run_at, completed_at, "
             f"status, num_questions, num_good, num_bad, num_needs_review, num_final_good, "
-            f"num_final_needs_review, accuracy_native, accuracy_adjusted "
+            f"num_final_needs_review, accuracy_native, accuracy_adjusted, eval_run_id "
             f"FROM {_runs_table()} WHERE space_id = {_q(space_id)} "
             f"ORDER BY run_at DESC LIMIT {lim}"
         )
@@ -210,7 +210,7 @@ def get_run(run_id: str):
         rows = _query(
             f"SELECT run_id, space_id, space_name, triggered_by, llm_model, run_at, completed_at, "
             f"status, num_questions, num_good, num_bad, num_needs_review, num_final_good, "
-            f"num_final_needs_review, accuracy_native, accuracy_adjusted, error "
+            f"num_final_needs_review, accuracy_native, accuracy_adjusted, error, eval_run_id "
             f"FROM {_runs_table()} WHERE run_id = {_q(run_id)} LIMIT 1"
         )
     except HTTPException:
@@ -226,16 +226,23 @@ def get_run(run_id: str):
 @router.get("/runs/{run_id}/results")
 def get_run_results(run_id: str):
     """Per-question results for a run (drill-down)."""
+    base_cols = (
+        "question_id, question, evaluation_note, expected_sql, generated_sql, "
+        "result_databricks, assessment_reasons, python_method, python_equivalent, python_detail, "
+        "llm_verdict, llm_confidence, llm_reasoning, llm_model, result_final, decided_by, "
+        "generated_result, expected_result"
+    )
+    where = f"FROM {_results_table()} WHERE run_id = {_q(run_id)}"
     try:
-        rows = _query(
-            f"SELECT question_id, question, evaluation_note, expected_sql, generated_sql, "
-            f"result_databricks, assessment_reasons, python_method, python_equivalent, python_detail, "
-            f"llm_verdict, llm_confidence, llm_reasoning, llm_model, result_final, decided_by, "
-            f"generated_result, expected_result "
-            f"FROM {_results_table()} WHERE run_id = {_q(run_id)}"
-        )
+        # eval_result_id (native per-question result id, used for the Genie UI
+        # deep link) is added by the job on its next run — fall back if the
+        # table predates it.
+        rows = _query(f"SELECT {base_cols}, eval_result_id {where}")
     except HTTPException:
-        rows = []
+        try:
+            rows = _query(f"SELECT {base_cols} {where}")
+        except HTTPException:
+            rows = []
 
     def _parse_json(raw: Any, default: Any):
         if isinstance(raw, str) and raw.strip():
