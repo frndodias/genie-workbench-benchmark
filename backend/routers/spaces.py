@@ -143,6 +143,13 @@ async def get_space_detail(space_id: SpaceId) -> dict:
             else:
                 raise
 
+        # The Genie API doesn't return a UI link; add it like list_spaces does so
+        # a page opened by URL (reload / deep link) still gets the Genie links
+        # (Agent header, Benchmark tab "Configure in Genie" / "Edit in Genie").
+        host = (client.config.host or "").rstrip("/")
+        if isinstance(space, dict) and host and not space.get("space_url"):
+            space["space_url"] = f"{host}/genie/rooms/{space_id}"
+
         # Get latest score and star status concurrently
         score_data, starred = await asyncio.gather(
             get_latest_score(space_id),
