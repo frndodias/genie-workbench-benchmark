@@ -155,6 +155,7 @@ def test_all_current_app_yaml_placeholders_are_covered():
             "WAREHOUSE_ID": "wh",
             "GSO_CATALOG": "main",
             "GSO_JOB_ID": "123",
+            "BENCHMARK_JOB_ID": "456",
             "LAKEBASE_INSTANCE": "genie-workbench-lakebase",
             "LLM_MODEL": "databricks-claude-sonnet-4-6",
             "MLFLOW_EXPERIMENT_ID": "",
@@ -1146,3 +1147,63 @@ def test_lakebase_existing_mode_rejects_soft_deleted_project():
 
     assert w.postgres.created_projects == []
     assert w.postgres.purged_projects == []
+
+
+# ── Job environment pins ─────────────────────────────────────────────────────
+# Serverless job environments resolve the wheel's deps from scratch; without
+# these uv.lock pins huggingface-hub 2.x sends pip backtracking to a broken
+# uvicorn sdist and library install fails (see JOB_ENV_PINS in gso_job.py).
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_WHEEL = "/Volumes/main/schema/wheel.whl"
+
+
+def _pin_cfg() -> InstallConfig:
+    return InstallConfig(app_name="genie-workbench", catalog="main", warehouse_id="wh", repo_root="/tmp")
+
+
+def test_gso_job_environment_pins_transitive_deps():
+    from scripts.deploy_lib.gso_job import JOB_ENV_PINS
+
+    settings = build_job_settings(_pin_cfg(), "/Workspace/Users/me/gso/jobs", _WHEEL)
+    assert settings["environments"][0]["spec"]["dependencies"] == [_WHEEL, *JOB_ENV_PINS]
+
+
+def test_benchmark_job_environment_pins_transitive_deps():
+    from scripts.deploy_lib.benchmark_job import build_benchmark_job_settings
+    from scripts.deploy_lib.gso_job import JOB_ENV_PINS
+
+    settings = build_benchmark_job_settings(_pin_cfg(), "/Workspace/Users/me/gso/jobs/run_benchmark_eval", _WHEEL)
+    assert settings["environments"][0]["spec"]["dependencies"] == [_WHEEL, *JOB_ENV_PINS]
+
+
+def test_job_env_pins_match_uv_lock():
+    import re
+
+    from scripts.deploy_lib.gso_job import JOB_ENV_PINS
+
+    lock = (_REPO_ROOT / "uv.lock").read_text()
+    for pin in JOB_ENV_PINS:
+        name, version = pin.split("==")
+        m = re.search(r'\[\[package\]\]\nname = "%s"\nversion = "([^"]+)"' % re.escape(name), lock)
+        assert m, f"{name} not found in uv.lock"
+        assert m.group(1) == version, f"{name}: JOB_ENV_PINS has {version}, uv.lock has {m.group(1)}"
+
+
+@pytest.mark.parametrize(
+    "bundle, job_key",
+    [
+        ("databricks.yml", "gso-optimization-runner"),
+        ("databricks.yml", "benchmark-eval-runner"),
+        ("packages/genie-space-optimizer/databricks.yml", None),
+    ],
+)
+def test_bundle_job_environments_carry_env_pins(bundle, job_key):
+    yaml = pytest.importorskip("yaml")
+    from scripts.deploy_lib.gso_job import JOB_ENV_PINS
+
+    jobs = yaml.safe_load((_REPO_ROOT / bundle).read_text())["resources"]["jobs"]
+    selected = [jobs[job_key]] if job_key else list(jobs.values())
+    for job in selected:
+        deps = job["environments"][0]["spec"]["dependencies"]
+        assert deps[1:] == JOB_ENV_PINS, f"{bundle}:{job_key or 'job'} deps {deps}"

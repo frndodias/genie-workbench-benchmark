@@ -20,22 +20,10 @@ from pathlib import Path
 from typing import Any
 
 from .config import InstallConfig
-from .gso_job import set_job_permissions, upsert_job
+from .gso_job import JOB_ENV_PINS, set_job_permissions, upsert_job
 from .workspace_source import upload_source_notebook
 
 BENCHMARK_NOTEBOOK_STEM = "run_benchmark_eval"
-
-# Transitive pins (versions from uv.lock) added next to the wheel. The serverless
-# environment resolves the wheel's deps from scratch (no lockfile), and
-# huggingface-hub 2.x (via litellm -> tokenizers) pulls httpx2/httpcore2, which
-# sends pip backtracking down to an ancient uvicorn sdist whose setup.py fails
-# ("No such file or directory: 'README.md'") — the job then dies at library
-# install. Keep these in sync with uv.lock when bumping those packages.
-BENCHMARK_ENV_PINS = [
-    "huggingface-hub==1.8.0",
-    "tokenizers==0.22.2",
-    "uvicorn==0.42.0",
-]
 
 # Job parameters the app passes on run-now (question_ids scopes the run; empty
 # ⇒ all). catalog/schema/warehouse default from the install config.
@@ -100,7 +88,7 @@ def build_benchmark_job_settings(cfg: InstallConfig, notebook_path: str, wheel_p
         "environments": [
             {
                 "environment_key": "default",
-                "spec": {"environment_version": "4", "dependencies": [wheel_path, *BENCHMARK_ENV_PINS]},
+                "spec": {"environment_version": "4", "dependencies": [wheel_path, *JOB_ENV_PINS]},
             }
         ],
     }

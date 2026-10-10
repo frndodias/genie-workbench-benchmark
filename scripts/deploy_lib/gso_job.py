@@ -20,6 +20,21 @@ from .workspace_source import (
 )
 
 
+# Transitive pins (versions from uv.lock) added next to the wheel in every job
+# environment that installs it (GSO optimization job + benchmark-eval job). The
+# serverless environment resolves the wheel's deps from scratch (no lockfile),
+# and huggingface-hub 2.x (via litellm -> tokenizers) pulls httpx2/httpcore2,
+# which sends pip backtracking down to an ancient uvicorn sdist whose setup.py
+# fails ("No such file or directory: 'README.md'") — the job then dies at
+# library install. Mirrored in databricks.yml and the package bundle; kept in
+# sync with uv.lock by backend/tests/test_deploy_lib.py.
+JOB_ENV_PINS = [
+    "huggingface-hub==1.8.0",
+    "tokenizers==0.22.2",
+    "uvicorn==0.42.0",
+]
+
+
 # GSO v2 linear 4-task DAG. This MIRRORS the package bundle job at
 # packages/genie-space-optimizer/databricks.yml (the validated source of truth,
 # guarded by tests/unit/test_phase7_job_dag.py): same task keys, order,
@@ -237,7 +252,7 @@ def build_job_settings(cfg: InstallConfig, notebooks_path: str, wheel_path: str)
                 "environment_key": "default",
                 "spec": {
                     "environment_version": "4",
-                    "dependencies": [wheel_path],
+                    "dependencies": [wheel_path, *JOB_ENV_PINS],
                 },
             }
         ],
